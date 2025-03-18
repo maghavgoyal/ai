@@ -15,8 +15,8 @@ import { cn } from "@/lib/utils"
 type AudioClip = {
   id: string
   url: string
-  startTime: number
-  endTime: number
+  startTime: string
+  endTime: string
   title: string
   duration: number
   status: "pending" | "processing" | "ready" | "error"
@@ -40,7 +40,7 @@ export function AudioCompilationTool() {
   const formatTimeValue = (min: string, sec: string) => {
     const minutes = min ? Number.parseInt(min) : 0
     const seconds = sec ? Number.parseInt(sec) : 0
-    return minutes * 60 + seconds
+    return `${minutes}:${seconds.toString().padStart(2, "0")}`
   }
 
   const getPlatform = (url: string): "youtube" | "spotify" | null => {
@@ -69,14 +69,14 @@ export function AudioCompilationTool() {
       return
     }
 
-    const startTimeInSeconds = formatTimeValue(startMinutes, startSeconds)
-    const endTimeInSeconds = formatTimeValue(endMinutes, endSeconds) || 180
+    const startTime = formatTimeValue(startMinutes, startSeconds)
+    const endTime = formatTimeValue(endMinutes, endSeconds) || "3:00"
 
     const newClip: AudioClip = {
       id: Date.now().toString(),
       url,
-      startTime: startTimeInSeconds,
-      endTime: endTimeInSeconds,
+      startTime,
+      endTime,
       title: `Clip ${audioClips.length + 1}`,
       duration: 180,
       status: "pending",
@@ -90,29 +90,48 @@ export function AudioCompilationTool() {
     setEndMinutes("")
     setEndSeconds("")
 
-    simulateProcessing(newClip.id)
+    processAudioClip(newClip)
   }
 
-  const simulateProcessing = (id: string) => {
+  const processAudioClip = async (clip: AudioClip) => {
     setIsProcessing(true)
     setProcessingProgress(0)
 
-    setAudioClips((clips) => clips.map((clip) => (clip.id === id ? { ...clip, status: "processing" } : clip)))
+    setAudioClips((clips) => clips.map((c) => (c.id === clip.id ? { ...c, status: "processing" } : c)))
 
-    const interval = setInterval(() => {
-      setProcessingProgress((prev) => {
-        const newProgress = prev + 10
-
-        if (newProgress >= 100) {
-          clearInterval(interval)
-          setIsProcessing(false)
-          setAudioClips((clips) => clips.map((clip) => (clip.id === id ? { ...clip, status: "ready" } : clip)))
-          return 100
-        }
-
-        return newProgress
+    try {
+      const response = await fetch('/api/audio/process', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: JSON.stringify({ clips: [clip] }),
       })
-    }, 300)
+
+      if (!response.ok) {
+        throw new Error('Failed to process audio clip')
+      }
+
+      const data = await response.json()
+      if (data.success) {
+        setAudioClips((clips) => clips.map((c) => (c.id === clip.id ? { ...c, status: "ready" } : c)))
+        setProcessingProgress(100)
+      } else {
+        throw new Error(data.error || 'Failed to process audio clip')
+      }
+    } catch (error) {
+      console.error('Error processing audio clip:', error)
+      setAudioClips((clips) => clips.map((c) => (c.id === clip.id ? { ...c, status: "error" } : c)))
+      toast({
+        title: "❌ Oops!",
+        description: error instanceof Error ? error.message : "Failed to process audio clip",
+        variant: "destructive",
+      })
+    } finally {
+      setIsProcessing(false)
+      setProcessingProgress(0)
+    }
   }
 
   const removeAudioClip = (id: string) => {
@@ -142,30 +161,48 @@ export function AudioCompilationTool() {
     setIsMerging(true)
 
     try {
-      const response = await fetch('/api/audio/route', {
+      const response = await fetch('/api/audio/process', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Accept': 'application/json',
         },
         body: JSON.stringify({ clips: audioClips }),
       })
 
       if (!response.ok) {
-        throw new Error('Failed to merge and download audio')
+        const contentType = response.headers.get('content-type')
+        if (contentType && contentType.includes('application/json')) {
+          const errorData = await response.json()
+          throw new Error(errorData.error || 'Failed to merge and download audio')
+        } else {
+          throw new Error(`HTTP error! status: ${response.status}`)
+        }
       }
 
       const data = await response.json()
-      console.log('Merged audio path:', data.audioPath)
-      // Handle the downloaded audio file (e.g., trigger a download)
-      toast({
-        title: "🔥 Let's go!",
-        description: "Your mix is ready to drop!",
-      })
+      
+      if (data.success && data.audioPath) {
+        // Create a temporary link to trigger the download
+        const link = document.createElement('a')
+        link.href = data.audioPath
+        link.download = 'your-mix.mp3'
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+        
+        toast({
+          title: "🔥 Let's go!",
+          description: "Your mix is ready to drop!",
+        })
+      } else {
+        throw new Error(data.error || 'Failed to process audio')
+      }
     } catch (error) {
       console.error('Error merging and downloading audio:', error)
       toast({
         title: "❌ Oops!",
-        description: "Something went wrong while merging your audio.",
+        description: error instanceof Error ? error.message : "Something went wrong while merging your audio.",
         variant: "destructive",
       })
     } finally {
@@ -173,10 +210,8 @@ export function AudioCompilationTool() {
     }
   }
 
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60)
-    const secs = seconds % 60
-    return `${mins}:${secs.toString().padStart(2, "0")}`
+  const formatTime = (timeStr: string) => {
+    return timeStr
   }
 
   const shareProject = () => {

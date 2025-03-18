@@ -3,31 +3,34 @@ import { AudioProcessor, AudioClip } from '@/lib/audio-processor'
 import fs from 'fs'
 import path from 'path'
 
-export async function POST(request: Request) {
+export const dynamic = 'force-dynamic'
+export const runtime = 'nodejs'
+
+export async function POST(request: NextRequest) {
+  console.log('API route hit')
   const processor = new AudioProcessor()
   
   try {
     console.log('Received audio processing request')
-    const body = await request.text()
+    const body = await request.json()
     console.log('Request body:', body)
     
     let clips: AudioClip[]
     try {
-      const parsedBody = JSON.parse(body)
-      clips = Array.isArray(parsedBody) ? parsedBody : parsedBody.clips
+      clips = Array.isArray(body) ? body : body.clips
       console.log('Parsed clips:', clips)
     } catch (parseError) {
       console.error('Failed to parse request body:', parseError)
       return NextResponse.json({
         success: false,
-        error: 'Invalid JSON in request body'
+        error: 'Invalid request body format'
       }, { status: 400 })
     }
     
     if (!Array.isArray(clips) || clips.length === 0) {
       console.error('Invalid clips array:', clips)
       return NextResponse.json(
-        { error: 'Invalid request: clips array is required' },
+        { success: false, error: 'Invalid request: clips array is required' },
         { status: 400 }
       )
     }
@@ -54,6 +57,11 @@ export async function POST(request: Request) {
         throw new Error('Failed to generate valid URL path')
       }
 
+      // Verify the file exists and is accessible
+      if (!fs.existsSync(outputPath)) {
+        throw new Error('Generated audio file not found')
+      }
+
       console.log('Returning success response with path:', urlPath)
       return NextResponse.json({
         success: true,
@@ -75,7 +83,7 @@ export async function POST(request: Request) {
     processor.cleanup()
     return NextResponse.json({
       success: false,
-      error: 'Invalid request format'
+      error: error instanceof Error ? error.message : 'Invalid request format'
     }, { status: 400 })
   }
 } 
